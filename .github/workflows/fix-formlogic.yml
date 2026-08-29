@@ -1,0 +1,293 @@
+name: Fix Sublink Form Logic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-formlogic:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Patch formLogic.js
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          import shutil
+
+          path = Path("src/components/formLogic.js")
+
+          if not path.exists():
+              raise SystemExit("找不到 src/components/formLogic.js")
+
+          text = path.read_text(encoding="utf-8")
+
+          print("文件大小:", len(text), "字符")
+          print("文件行数:", len(text.splitlines()))
+
+          # ============================================================
+          # 防止重复执行
+          # ============================================================
+
+          if "getBasePath" in text:
+              print("检测到 getBasePath 已存在。")
+              print("文件可能已经修改过，不再重复修改。")
+              raise SystemExit(0)
+
+          # ============================================================
+          # 创建备份
+          # ============================================================
+
+          backup = Path("/tmp/formLogic.js.original")
+          shutil.copy2(path, backup)
+
+          # ============================================================
+          # 1. 在第一个 "return {" 后插入 getBasePath()
+          # 不依赖缩进
+          # ============================================================
+
+          pattern = r"(\breturn\s*\{\s*\n)"
+
+          match = re.search(pattern, text)
+
+          if not match:
+              raise SystemExit(
+                  "找不到 return {。请停止，不要继续修改。"
+              )
+
+          insert = """\
+            getBasePath() {
+                const pathname = window.location.pathname;
+
+                if (
+                    pathname === '/sublink-worker' ||
+                    pathname.startsWith('/sublink-worker/')
+                ) {
+                    return '/sublink-worker';
+                }
+
+                return '';
+            },
+
+"""
+
+          text = (
+              text[:match.end()]
+              + insert
+              + text[match.end():]
+          )
+
+          print("✓ 已添加 getBasePath()")
+
+          # ============================================================
+          # 2. 所有 window.location.origin 后面需要 basePath 的位置
+          #
+          # 只处理特定函数中的代码，避免误伤其它地方。
+          # ============================================================
+
+          # getSubconverterUrl
+          section_pattern = (
+              r"(getSubconverterUrl\s*\(\s*\)\s*\{)"
+              r"(.*?)(?=\n\s*\},)"
+          )
+
+          match = re.search(section_pattern, text, re.S)
+
+          if match:
+              section = match.group(0)
+
+              if "const basePath" not in section:
+                  section = re.sub(
+                      r"(const\s+origin\s*=\s*window\.location\.origin\s*;)",
+                      r"\1\n                const basePath = this.getBasePath();",
+                      section,
+                      count=1
+                  )
+
+              section = section.replace(
+                  "origin + '/subconverter'",
+                  "origin + basePath + '/subconverter'"
+              )
+
+              text = (
+                  text[:match.start()]
+                  + section
+                  + text[match.end():]
+              )
+
+              print("✓ 已修改 getSubconverterUrl()")
+
+          # ============================================================
+          # 3. /config
+          # ============================================================
+
+          text, count = re.subn(
+              r"fetch\(\s*['\"]\/config['\"]",
+              "fetch(`${this.getBasePath()}/config`",
+              text,
+              count=1
+          )
+
+          if count:
+              print("✓ 已修改 /config")
+
+          # ============================================================
+          # 4. generatedLinks
+          # ============================================================
+
+          generated_pattern = (
+              r"(this\.generatedLinks\s*=\s*\{\s*"
+              r"xray:\s*)(origin\s*\+\s*)['\"]\/xray\?['\"]"
+          )
+
+          text, count = re.subn(
+              generated_pattern,
+              r"\1origin + this.getBasePath() + '/xray?'",
+              text,
+              count=1
+          )
+
+          if count:
+              print("✓ 已修改 Xray 链接")
+
+          patterns = [
+              (
+                  r"(singbox:\s*)origin\s*\+\s*['\"]\/singbox\?['\"]",
+                  r"\1origin + this.getBasePath() + '/singbox?'"
+              ),
+              (
+                  r"(clash:\s*)origin\s*\+\s*['\"]\/clash\?['\"]",
+                  r"\1origin + this.getBasePath() + '/clash?'"
+              ),
+              (
+                  r"(surge:\s*)origin\s*\+\s*['\"]\/surge\?['\"]",
+                  r"\1origin + this.getBasePath() + '/surge?'"
+              )
+          ]
+
+          for pattern, replacement in patterns:
+              text, count = re.subn(
+                  pattern,
+                  replacement,
+                  text,
+                  count=1
+              )
+
+              if count:
+                  print("✓ 已修改一个订阅链接")
+
+          # ============================================================
+          # 5. shorten-v2
+          # ============================================================
+
+          text, count = re.subn(
+              r"\$\{origin\}\/shorten-v2",
+              "${origin}${this.getBasePath()}/shorten-v2",
+              text,
+              count=1
+          )
+
+          if count:
+              print("✓ 已修改 shorten-v2")
+
+          # ============================================================
+          # 6. 短链接生成
+          # ============================================================
+
+          text, count = re.subn(
+              r"\$\{origin\}\/\$\{prefixMap\[type\]\}",
+              "${origin}${this.getBasePath()}/${prefixMap[type]}",
+              text,
+              count=1
+          )
+
+          if count:
+              print("✓ 已修改短链接地址")
+
+          # ============================================================
+          # 7. /resolve
+          # ============================================================
+
+          text, count = re.subn(
+              r"`\/resolve\?url=\$\{encodeURIComponent\(text\)\}`",
+              "`${this.getBasePath()}/resolve?url=${encodeURIComponent(text)}`",
+              text,
+              count=1
+          )
+
+          if count:
+              print("✓ 已修改 /resolve")
+
+          # ============================================================
+          # 8. 写回文件
+          # ============================================================
+
+          path.write_text(text, encoding="utf-8")
+
+          # ============================================================
+          # 9. 最终验证
+          # ============================================================
+
+          final_text = path.read_text(encoding="utf-8")
+
+          checks = {
+              "getBasePath": "getBasePath" in final_text,
+              "xray": "origin + this.getBasePath() + '/xray?'" in final_text,
+              "singbox": "origin + this.getBasePath() + '/singbox?'" in final_text,
+              "clash": "origin + this.getBasePath() + '/clash?'" in final_text,
+              "surge": "origin + this.getBasePath() + '/surge?'" in final_text,
+          }
+
+          print("")
+          print("========== 最终检查 ==========")
+
+          for name, ok in checks.items():
+              print(
+                  ("✓ " if ok else "✗ ") + name
+              )
+
+          if not all(checks.values()):
+              print("")
+              print("修改没有完全成功。")
+              print("为了安全，恢复原文件。")
+
+              shutil.copy2(backup, path)
+
+              raise SystemExit(
+                  "最终检查失败，已经自动恢复原文件。"
+              )
+
+          print("")
+          print("================================")
+          print("✓ formLogic.js 修改成功")
+          print("================================")
+
+      - name: Show generated link code
+        run: |
+          echo "========== generatedLinks =========="
+          grep -A 8 -B 2 "generatedLinks" src/components/formLogic.js || true
+
+          echo ""
+          echo "========== getBasePath =========="
+          grep -A 12 -B 2 "getBasePath" src/components/formLogic.js || true
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add src/components/formLogic.js
+
+          if git diff --cached --quiet; then
+            echo "没有需要提交的修改。"
+            exit 0
+          fi
+
+          git commit -m "Fix custom domain subscription paths"
+          git push
