@@ -1,6 +1,8 @@
 import { createApp } from './app/createApp.jsx';
 import { createCloudflareRuntime } from './runtime/cloudflare.js';
 
+const BASE_PATH = '/sublink-worker';
+
 let honoApp;
 
 function getApp(env) {
@@ -12,8 +14,24 @@ function getApp(env) {
 }
 
 export default {
-    fetch(request, env, ctx) {
+    async fetch(request, env, ctx) {
         const app = getApp(env);
-        return app.fetch(request, env, ctx);
+
+        const url = new URL(request.url);
+
+        // When accessed through:
+        // https://www.primecare.cloudns.org/sublink-worker/*
+        // remove the external base path before handing the request
+        // to the original Sublink application.
+        if (
+            url.pathname === BASE_PATH ||
+            url.pathname.startsWith(`${BASE_PATH}/`)
+        ) {
+            url.pathname = url.pathname.slice(BASE_PATH.length) || '/';
+        }
+
+        const rewrittenRequest = new Request(url, request);
+
+        return app.fetch(rewrittenRequest, env, ctx);
     }
 };
