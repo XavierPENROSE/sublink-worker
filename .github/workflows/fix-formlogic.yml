@@ -1,0 +1,326 @@
+name: Fix Sublink Form Logic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-formlogic:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Modify formLogic.js
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("src/components/formLogic.js")
+
+          if not path.exists():
+              raise SystemExit("错误：找不到 src/components/formLogic.js")
+
+          text = path.read_text(encoding="utf-8")
+          original = text
+
+          # 防止重复执行
+          if "getBasePath()" in text:
+              raise SystemExit(
+                  "错误：formLogic.js 已经包含 getBasePath()，无需再次修改。"
+              )
+
+          def replace_once(old, new, name):
+              global text
+
+              count = text.count(old)
+
+              if count != 1:
+                  raise SystemExit(
+                      f"错误：{name} 匹配失败。"
+                      f"预期 1 处，实际找到 {count} 处。"
+                  )
+
+              text = text.replace(old, new, 1)
+              print(f"✓ {name}")
+
+          # ============================================================
+          # 1. 添加 getBasePath()
+          # ============================================================
+
+          replace_once(
+              """        return {
+            input: '',""",
+
+              """        return {
+            getBasePath() {
+                const pathname = window.location.pathname;
+
+                if (
+                    pathname === '/sublink-worker' ||
+                    pathname.startsWith('/sublink-worker/')
+                ) {
+                    return '/sublink-worker';
+                }
+
+                return '';
+            },
+
+            input: '',""",
+
+              "添加 getBasePath()"
+          )
+
+          # ============================================================
+          # 2. getSubconverterUrl()
+          # ============================================================
+
+          replace_once(
+              """            getSubconverterUrl() {
+                const origin = window.location.origin;
+                const params = new URLSearchParams();""",
+
+              """            getSubconverterUrl() {
+                const origin = window.location.origin;
+                const basePath = this.getBasePath();
+                const params = new URLSearchParams();""",
+
+              "修改 getSubconverterUrl()"
+          )
+
+          replace_once(
+              """                return origin + '/subconverter' + (queryString ? '?' + queryString : '');""",
+
+              """                return origin + basePath + '/subconverter' + (queryString ? '?' + queryString : '');""",
+
+              "修改 Subconverter URL"
+          )
+
+          # ============================================================
+          # 3. saveBaseConfig()
+          # ============================================================
+
+          replace_once(
+              """                    const response = await fetch('/config', {""",
+
+              """                    const basePath = this.getBasePath();
+                    const response = await fetch(`${basePath}/config`, {""",
+
+              "修改 config API"
+          )
+
+          # ============================================================
+          # 4. submitForm()
+          # ============================================================
+
+          replace_once(
+              """                    // Construct URLs
+                    const origin = window.location.origin;
+                    const params = new URLSearchParams();""",
+
+              """                    // Construct URLs
+                    const origin = window.location.origin;
+                    const basePath = this.getBasePath();
+                    const params = new URLSearchParams();""",
+
+              "修改 submitForm()"
+          )
+
+          replace_once(
+              """                    this.generatedLinks = {
+                        xray: origin + '/xray?' + queryString,
+                        singbox: origin + '/singbox?' + queryString,
+                        clash: origin + '/clash?' + queryString,
+                        surge: origin + '/surge?' + queryString
+                    };""",
+
+              """                    this.generatedLinks = {
+                        xray: origin + basePath + '/xray?' + queryString,
+                        singbox: origin + basePath + '/singbox?' + queryString,
+                        clash: origin + basePath + '/clash?' + queryString,
+                        surge: origin + basePath + '/surge?' + queryString
+                    };""",
+
+              "修改生成的订阅链接"
+          )
+
+          # ============================================================
+          # 5. shortenLinks()
+          # ============================================================
+
+          replace_once(
+              """                    const origin = window.location.origin;
+                    const shortened = {};""",
+
+              """                    const origin = window.location.origin;
+                    const basePath = this.getBasePath();
+                    const shortened = {};""",
+
+              "修改 shortenLinks()"
+          )
+
+          replace_once(
+              """                            let apiUrl = `${origin}/shorten-v2?url=${encodeURIComponent(url)}`;""",
+
+              """                            let apiUrl = `${origin}${basePath}/shorten-v2?url=${encodeURIComponent(url)}`;""",
+
+              "修改 shorten API"
+          )
+
+          replace_once(
+              """                            shortened[type] = `${origin}/${prefixMap[type]}/${returnedCode}`;""",
+
+              """                            shortened[type] = `${origin}${basePath}/${prefixMap[type]}/${returnedCode}`;""",
+
+              "修改短链接地址"
+          )
+
+          # ============================================================
+          # 6. isSubscriptionUrl()
+          # ============================================================
+
+          replace_once(
+              """                    // Check if it matches our short link pattern: /[bcxs]/[code]
+                    const pathMatch = url.pathname.match(/^\\/([bcxs])\\/([a-zA-Z0-9_-]+)$/);
+                    if (pathMatch) {
+                        return true;
+                    }
+                    // Check if it's a full subscription URL with query params
+                    const fullMatch = url.pathname.match(/^\\/(singbox|clash|xray|surge)$/);""",
+
+              """                    const basePath = this.getBasePath();
+                    let pathname = url.pathname;
+
+                    if (basePath && pathname.startsWith(basePath + '/')) {
+                        pathname = pathname.slice(basePath.length);
+                    } else if (basePath && pathname === basePath) {
+                        pathname = '/';
+                    }
+
+                    // Check if it matches our short link pattern: /[bcxs]/[code]
+                    const pathMatch = pathname.match(/^\\/([bcxs])\\/([a-zA-Z0-9_-]+)$/);
+                    if (pathMatch) {
+                        return true;
+                    }
+
+                    // Check if it's a full subscription URL with query params
+                    const fullMatch = pathname.match(/^\\/(singbox|clash|xray|surge)$/);""",
+
+              "修改订阅 URL 检测"
+          )
+
+          # ============================================================
+          # 7. tryParseSubscriptionUrl()
+          # ============================================================
+
+          replace_once(
+              """                    // Check if it's a short link
+                    const shortMatch = urlToParse.pathname.match(/^\\/([bcxs])\\/([a-zA-Z0-9_-]+)$/);
+                    if (shortMatch) {""",
+
+              """                    // Check if it's a short link
+                    const basePath = this.getBasePath();
+                    let pathname = urlToParse.pathname;
+
+                    if (basePath && pathname.startsWith(basePath + '/')) {
+                        pathname = pathname.slice(basePath.length);
+                    }
+
+                    const shortMatch = pathname.match(/^\\/([bcxs])\\/([a-zA-Z0-9_-]+)$/);
+                    if (shortMatch) {""",
+
+              "修改短链接解析路径"
+          )
+
+          replace_once(
+              """                        const response = await fetch(`/resolve?url=${encodeURIComponent(text)}`);""",
+
+              """                        const response = await fetch(`${basePath}/resolve?url=${encodeURIComponent(text)}`);""",
+
+              "修改 resolve API"
+          )
+
+          # ============================================================
+          # 最终检查
+          # ============================================================
+
+          required = [
+              "getBasePath()",
+              "origin + basePath + '/xray?'",
+              "origin + basePath + '/singbox?'",
+              "origin + basePath + '/clash?'",
+              "origin + basePath + '/surge?'",
+              "origin + basePath + '/subconverter'",
+              "${basePath}/config",
+              "${origin}${basePath}/shorten-v2",
+              "${origin}${basePath}/${prefixMap[type]}/${returnedCode}",
+              "${basePath}/resolve"
+          ]
+
+          print("")
+          print("开始检查修改结果...")
+
+          for item in required:
+              if item not in text:
+                  raise SystemExit(
+                      f"错误：修改完成检查失败，缺少：{item}"
+                  )
+              print(f"✓ {item}")
+
+          # ============================================================
+          # 保存
+          # ============================================================
+
+          # 备份到临时目录，不放进 src，避免影响项目构建
+          backup = Path("/tmp/formLogic.js.bak")
+          backup.write_text(original, encoding="utf-8")
+
+          path.write_text(text, encoding="utf-8")
+
+          print("")
+          print("========================================")
+          print("✓ formLogic.js 修改成功！")
+          print("========================================")
+          print("")
+          print("已修改：")
+          print("  ✓ /sublink-worker/xray")
+          print("  ✓ /sublink-worker/singbox")
+          print("  ✓ /sublink-worker/clash")
+          print("  ✓ /sublink-worker/surge")
+          print("  ✓ /sublink-worker/subconverter")
+          print("  ✓ /sublink-worker/config")
+          print("  ✓ /sublink-worker/shorten-v2")
+          print("  ✓ /sublink-worker/resolve")
+
+
+      - name: Show modified code
+        run: |
+          echo "========================================"
+          echo "检查生成订阅链接的代码："
+          echo "========================================"
+
+          grep -A 7 -B 2 "this.generatedLinks = {" \
+            src/components/formLogic.js
+
+          echo ""
+          echo "========================================"
+          echo "检查 getBasePath："
+          echo "========================================"
+
+          grep -A 12 "getBasePath()" \
+            src/components/formLogic.js
+
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add src/components/formLogic.js
+
+          git commit -m "Fix custom path for subscription URLs"
+
+          git push
