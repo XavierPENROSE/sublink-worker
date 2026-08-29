@@ -1,0 +1,285 @@
+name: Fix Sublink Base Path
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-path:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch formLogic.js
+        shell: python
+        run: |
+          from pathlib import Path
+
+          file = Path("src/components/formLogic.js")
+
+          if not file.exists():
+              raise SystemExit("ERROR: src/components/formLogic.js not found.")
+
+          text = file.read_text(encoding="utf-8")
+
+          original = text
+
+          def replace_once(old, new, name):
+              global text
+
+              count = text.count(old)
+
+              if count == 0:
+                  raise SystemExit(
+                      f"ERROR: Could not find target for: {name}"
+                  )
+
+              if count != 1:
+                  raise SystemExit(
+                      f"ERROR: Expected exactly 1 occurrence for {name}, "
+                      f"but found {count}."
+                  )
+
+              text = text.replace(old, new, 1)
+              print(f"OK: {name}")
+
+          # ------------------------------------------------------------
+          # 1. Add getBasePath()
+          # ------------------------------------------------------------
+
+          replace_once(
+              """        return {
+            input: '',""",
+
+              """        return {
+            // Detect whether Sublink is running under a path prefix.
+            // Custom domain:
+            //   /sublink-worker/ -> /sublink-worker
+            // workers.dev:
+            //   / -> ''
+            getBasePath() {
+                const pathname = window.location.pathname;
+
+                if (
+                    pathname === '/sublink-worker' ||
+                    pathname.startsWith('/sublink-worker/')
+                ) {
+                    return '/sublink-worker';
+                }
+
+                return '';
+            },
+
+            input: '',""",
+
+              "add getBasePath()"
+          )
+
+          # ------------------------------------------------------------
+          # 2. Subconverter URL
+          # ------------------------------------------------------------
+
+          replace_once(
+              """            getSubconverterUrl() {
+                const origin = window.location.origin;""",
+
+              """            getSubconverterUrl() {
+                const origin = window.location.origin;
+                const basePath = this.getBasePath();""",
+
+              "add basePath to getSubconverterUrl()"
+          )
+
+          replace_once(
+              """                return origin + '/subconverter' + (queryString ? '?' + queryString : '');""",
+
+              """                return origin + basePath + '/subconverter' + (queryString ? '?' + queryString : '');""",
+
+              "fix subconverter URL"
+          )
+
+          # ------------------------------------------------------------
+          # 3. Save config
+          # ------------------------------------------------------------
+
+          replace_once(
+              """                try {
+                    const response = await fetch('/config', {""",
+
+              """                try {
+                    const basePath = this.getBasePath();
+                    const response = await fetch(`${basePath}/config`, {""",
+
+              "fix config API URL"
+          )
+
+          # ------------------------------------------------------------
+          # 4. Generated subscription URLs
+          # ------------------------------------------------------------
+
+          replace_once(
+              """                    const origin = window.location.origin;
+                    const params = new URLSearchParams();""",
+
+              """                    const origin = window.location.origin;
+                    const basePath = this.getBasePath();
+                    const params = new URLSearchParams();""",
+
+              "add basePath to submitForm()"
+          )
+
+          replace_once(
+              """                    this.generatedLinks = {
+                        xray: origin + '/xray?' + queryString,
+                        singbox: origin + '/singbox?' + queryString,
+                        clash: origin + '/clash?' + queryString,
+                        surge: origin + '/surge?' + queryString
+                    };""",
+
+              """                    this.generatedLinks = {
+                        xray: origin + basePath + '/xray?' + queryString,
+                        singbox: origin + basePath + '/singbox?' + queryString,
+                        clash: origin + basePath + '/clash?' + queryString,
+                        surge: origin + basePath + '/surge?' + queryString
+                    };""",
+
+              "fix generated subscription URLs"
+          )
+
+          # ------------------------------------------------------------
+          # 5. Shorten API
+          # ------------------------------------------------------------
+
+          replace_once(
+              """                    const origin = window.location.origin;
+                    const shortened = {};""",
+
+              """                    const origin = window.location.origin;
+                    const basePath = this.getBasePath();
+                    const shortened = {};""",
+
+              "add basePath to shortenLinks()"
+          )
+
+          replace_once(
+              """                            let apiUrl = `${origin}/shorten-v2?url=${encodeURIComponent(url)}`;""",
+
+              """                            let apiUrl = `${origin}${basePath}/shorten-v2?url=${encodeURIComponent(url)}`;""",
+
+              "fix shorten API URL"
+          )
+
+          replace_once(
+              """                            shortened[type] = `${origin}/${prefixMap[type]}/${returnedCode}`;""",
+
+              """                            shortened[type] = `${origin}${basePath}/${prefixMap[type]}/${returnedCode}`;""",
+
+              "fix generated short URLs"
+          )
+
+          # ------------------------------------------------------------
+          # 6. Subscription URL detection
+          # ------------------------------------------------------------
+
+          replace_once(
+              """                    // Check if it matches our short link pattern: /[bcxs]/[code]
+                    const pathMatch = url.pathname.match(/^\\/([bcxs])\\/([a-zA-Z0-9_-]+)$/);
+                    if (pathMatch) {
+                        return true;
+                    }
+                    // Check if it's a full subscription URL with query params
+                    const fullMatch = url.pathname.match(/^\\/(singbox|clash|xray|surge)$/);""",
+
+              """                    const basePath = this.getBasePath();
+                    let pathname = url.pathname;
+
+                    if (basePath && pathname.startsWith(basePath + '/')) {
+                        pathname = pathname.slice(basePath.length);
+                    } else if (basePath && pathname === basePath) {
+                        pathname = '/';
+                    }
+
+                    // Check if it matches our short link pattern: /[bcxs]/[code]
+                    const pathMatch = pathname.match(/^\\/([bcxs])\\/([a-zA-Z0-9_-]+)$/);
+                    if (pathMatch) {
+                        return true;
+                    }
+
+                    // Check if it's a full subscription URL with query params
+                    const fullMatch = pathname.match(/^\\/(singbox|clash|xray|surge)$/);""",
+
+              "fix subscription URL detection"
+          )
+
+          # ------------------------------------------------------------
+          # 7. Short-link resolving
+          # ------------------------------------------------------------
+
+          replace_once(
+              """                    // Check if it's a short link
+                    const shortMatch = urlToParse.pathname.match(/^\\/([bcxs])\\/([a-zA-Z0-9_-]+)$/);
+                    if (shortMatch) {""",
+
+              """                    // Check if it's a short link
+                    const basePath = this.getBasePath();
+                    let pathname = urlToParse.pathname;
+
+                    if (basePath && pathname.startsWith(basePath + '/')) {
+                        pathname = pathname.slice(basePath.length);
+                    }
+
+                    const shortMatch = pathname.match(/^\\/([bcxs])\\/([a-zA-Z0-9_-]+)$/);
+                    if (shortMatch) {""",
+
+              "fix short-link path detection"
+          )
+
+          replace_once(
+              """                        const response = await fetch(`/resolve?url=${encodeURIComponent(text)}`);""",
+
+              """                        const response = await fetch(`${basePath}/resolve?url=${encodeURIComponent(text)}`);""",
+
+              "fix resolve API URL"
+          )
+
+          # ------------------------------------------------------------
+          # Safety check
+          # ------------------------------------------------------------
+
+          if text == original:
+              raise SystemExit("ERROR: No changes were made.")
+
+          file.write_text(text, encoding="utf-8")
+
+          print("")
+          print("==========================================")
+          print("SUCCESS: formLogic.js has been patched.")
+          print("==========================================")
+
+      - name: Verify modified file
+        run: |
+          echo "Checking modified file..."
+          grep -n "getBasePath" src/components/formLogic.js
+          grep -n "basePath" src/components/formLogic.js
+          echo "Verification completed."
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add src/components/formLogic.js
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Fix Sublink base path for custom domain"
+          git push
