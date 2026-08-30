@@ -1,0 +1,275 @@
+name: Fix formLogic Base Path
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix-formlogic:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Modify formLogic.js
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          file = Path("src/components/formLogic.js")
+
+          if not file.exists():
+              print("❌ 找不到 src/components/formLogic.js")
+              sys.exit(1)
+
+          text = file.read_text(encoding="utf-8")
+
+          print("========================================")
+          print("开始检查 formLogic.js")
+          print("========================================")
+
+          # ============================================================
+          # 1. 检查是否已经使用 BASE_PATH
+          # ============================================================
+
+          if "BASE_PATH" in text:
+              print("✓ formLogic.js 已经包含 BASE_PATH")
+              print("检查是否已经正确使用 config.js...")
+          
+          # ============================================================
+          # 2. 删除旧的硬编码路径判断
+          #
+          # 例如：
+          #
+          # window.location.pathname.startsWith('/sublink-worker')
+          #
+          # 改成：
+          #
+          # window.location.pathname.startsWith(BASE_PATH)
+          #
+          # ============================================================
+
+          old_patterns = [
+              (
+                  r"window\.location\.pathname\.startsWith\('/sublink-worker'\)",
+                  "window.location.pathname.startsWith(BASE_PATH)"
+              ),
+              (
+                  r'window\.location\.pathname\.startsWith\("/sublink-worker"\)',
+                  "window.location.pathname.startsWith(BASE_PATH)"
+              ),
+          ]
+
+          changed = False
+
+          for pattern, replacement in old_patterns:
+              new_text, count = re.subn(pattern, replacement, text)
+
+              if count > 0:
+                  print(f"✓ 替换旧路径判断 {count} 处")
+                  text = new_text
+                  changed = True
+
+          # ============================================================
+          # 3. 替换硬编码 '/sublink-worker'
+          #
+          # 例如：
+          #
+          # ? '/sublink-worker' : ''
+          #
+          # 改成：
+          #
+          # ? BASE_PATH : ''
+          #
+          # ============================================================
+
+          replacements = [
+              (
+                  r"\?\s*'/sublink-worker'\s*:\s*''",
+                  "? BASE_PATH : ''"
+              ),
+              (
+                  r'\?\s*"/sublink-worker"\s*:\s*""',
+                  '? BASE_PATH : ""'
+              ),
+          ]
+
+          for pattern, replacement in replacements:
+              new_text, count = re.subn(pattern, replacement, text)
+
+              if count > 0:
+                  print(f"✓ 替换三元路径 {count} 处")
+                  text = new_text
+                  changed = True
+
+          # ============================================================
+          # 4. 替换：
+          #
+          # origin + '/sublink-worker' + ...
+          #
+          # 为：
+          #
+          # origin + BASE_PATH + ...
+          #
+          # ============================================================
+
+          new_text, count = re.subn(
+              r"origin\s*\+\s*'/sublink-worker'",
+              "origin + BASE_PATH",
+              text
+          )
+
+          if count > 0:
+              print(f"✓ 替换 origin + '/sublink-worker'：{count} 处")
+              text = new_text
+              changed = True
+
+          new_text, count = re.subn(
+              r'origin\s*\+\s*"/sublink-worker"',
+              "origin + BASE_PATH",
+              text
+          )
+
+          if count > 0:
+              print(f"✓ 替换 origin + \"/sublink-worker\"：{count} 处")
+              text = new_text
+              changed = True
+
+          # ============================================================
+          # 5. 如果文件里还有孤立的 '/sublink-worker'
+          #
+          # 这里不直接盲目替换。
+          # 先报告出来，避免误伤。
+          # ============================================================
+
+          remaining = text.count("/sublink-worker")
+
+          if remaining > 0:
+              print("")
+              print("⚠️ 警告：修改后仍发现硬编码 /sublink-worker")
+              print(f"剩余数量：{remaining}")
+              print("")
+              print("出现位置：")
+
+              for index, line in enumerate(text.splitlines(), 1):
+                  if "/sublink-worker" in line:
+                      print(f"{index}: {line}")
+
+              print("")
+              print("为了安全起见，本次 Action 不会自动提交。")
+              sys.exit(1)
+
+          # ============================================================
+          # 6. 确保 formLogic.js 使用 BASE_PATH
+          # ============================================================
+
+          if "BASE_PATH" not in text:
+              print("")
+              print("❌ 修改后没有检测到 BASE_PATH")
+              print("为了安全起见，本次 Action 不会提交。")
+              sys.exit(1)
+
+          # ============================================================
+          # 7. 在文件顶部导入 config.js
+          #
+          # 当前 formLogic.js：
+          #
+          # export const formLogicFn = (t) => {
+          #
+          # 修改为：
+          #
+          # import { BASE_PATH } from '../config.js';
+          #
+          # export const formLogicFn = (t) => {
+          #
+          # ============================================================
+
+          import_line = "import { BASE_PATH } from '../config.js';"
+
+          if import_line not in text:
+              target = "export const formLogicFn = (t) => {"
+
+              if target not in text:
+                  print("❌ 找不到 formLogicFn 定义")
+                  sys.exit(1)
+
+              text = text.replace(
+                  target,
+                  import_line + "\n\n" + target,
+                  1
+              )
+
+              print("✓ 已添加 config.js 导入")
+
+          else:
+              print("✓ config.js 导入已经存在")
+
+          # ============================================================
+          # 8. 保存
+          # ============================================================
+
+          file.write_text(text, encoding="utf-8")
+
+          print("")
+          print("========================================")
+          print("✓ formLogic.js 修改完成")
+          print("========================================")
+
+          PY
+
+      - name: Verify result
+        run: |
+          echo "========================================"
+          echo "检查 formLogic.js"
+          echo "========================================"
+
+          grep -n "config.js" src/components/formLogic.js || true
+
+          echo ""
+          echo "BASE_PATH 使用情况："
+          grep -n "BASE_PATH" src/components/formLogic.js || true
+
+          echo ""
+          echo "检查旧路径："
+
+          if grep -n "/sublink-worker" src/components/formLogic.js; then
+            echo "❌ 仍然存在硬编码 /sublink-worker"
+            exit 1
+          fi
+
+          echo ""
+          echo "✓ 检查通过"
+
+      - name: Show diff
+        run: |
+          echo "========================================"
+          echo "修改内容"
+          echo "========================================"
+
+          git diff -- src/components/formLogic.js
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add src/components/formLogic.js
+
+          if git diff --cached --quiet; then
+            echo "没有需要提交的修改"
+            exit 0
+          fi
+
+          git commit -m "fix: use shared BASE_PATH in formLogic"
+
+          git push
+
+          echo ""
+          echo "========================================"
+          echo "✓ 修改已经提交到 GitHub"
+          echo "========================================"
