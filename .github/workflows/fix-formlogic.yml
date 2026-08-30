@@ -75,7 +75,6 @@ jobs:
                 return '';
             },
 
-"""
 
           text = (
               text[:match.end()]
