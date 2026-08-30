@@ -195,6 +195,7 @@ export const formLogicFn = (t) => {
 
             getSubconverterUrl() {
                 const origin = window.location.origin;
+                const basePath = window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : '';
                 const params = new URLSearchParams();
 
                 // Use preset name directly if a predefined rule set is selected
@@ -228,7 +229,7 @@ export const formLogicFn = (t) => {
                 }
 
                 const queryString = params.toString();
-                return origin + '/subconverter' + (queryString ? '?' + queryString : '');
+                return origin + basePath + '/subconverter' + (queryString ? '?' + queryString : '');
             },
 
             copySubconverterUrl() {
@@ -265,7 +266,7 @@ export const formLogicFn = (t) => {
 
                 this.savingConfig = true;
                 try {
-                    const response = await fetch('/config', {
+                    const response = await fetch((window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : '') + '/config', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
@@ -372,6 +373,7 @@ export const formLogicFn = (t) => {
 
                     // Construct URLs
                     const origin = window.location.origin;
+                const basePath = window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : '';
                     const params = new URLSearchParams();
                     params.append('config', this.input);
                     params.append('ua', this.customUA);
@@ -394,10 +396,10 @@ export const formLogicFn = (t) => {
                     const queryString = params.toString();
 
                     this.generatedLinks = {
-                        xray: origin + '/xray?' + queryString,
-                        singbox: origin + '/singbox?' + queryString,
-                        clash: origin + '/clash?' + queryString,
-                        surge: origin + '/surge?' + queryString
+                        xray: origin + (window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : '') + '/xray?' + queryString,
+                        singbox: origin + (window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : '') + '/singbox?' + queryString,
+                        clash: origin + (window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : '') + '/clash?' + queryString,
+                        surge: origin + (window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : '') + '/surge?' + queryString
                     };
 
                     // Scroll to results
@@ -430,6 +432,7 @@ export const formLogicFn = (t) => {
                 this.shortening = true;
                 try {
                     const origin = window.location.origin;
+                const basePath = window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : '';
                     const shortened = {};
 
                     // Use custom short code if provided, otherwise let backend generate it once
@@ -439,7 +442,7 @@ export const formLogicFn = (t) => {
                     // Shorten each link type
                     for (const [type, url] of Object.entries(this.generatedLinks)) {
                         try {
-                            let apiUrl = `${origin}/shorten-v2?url=${encodeURIComponent(url)}`;
+                            let apiUrl = `${origin}$(window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : '')/shorten-v2?url=${encodeURIComponent(url)}`;
 
                             // For the first request, either use custom code or let backend generate
                             // For subsequent requests, use the code from first request
@@ -468,7 +471,7 @@ export const formLogicFn = (t) => {
                                 surge: 's'
                             };
 
-                            shortened[type] = `${origin}/${prefixMap[type]}/${returnedCode}`;
+                            shortened[type] = `${origin}$(window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : '')/${prefixMap[type]}/${returnedCode}`;
                         } catch (error) {
                             console.error(`Error shortening ${type} link:`, error);
                             throw error;
@@ -550,7 +553,7 @@ export const formLogicFn = (t) => {
 
                     if (shortMatch) {
                         // It's a short link, resolve it first
-                        const response = await fetch(`/resolve?url=${encodeURIComponent(text)}`);
+                        const response = await fetch(`${window.location.pathname.startsWith('/sublink-worker') ? '/sublink-worker' : ''}/resolve?url=${encodeURIComponent(text)}`);
                         if (!response.ok) {
                             console.warn('Failed to resolve short URL');
                             return;
